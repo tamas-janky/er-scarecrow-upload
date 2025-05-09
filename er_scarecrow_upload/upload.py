@@ -163,7 +163,7 @@ class DriveService:
         return parents[-1]
 
     def upload_hierarchy(
-        self, local_root: pathlib.Path, folder: Dict[str, str], local_rel_directory: str = "."
+        self, local_root: pathlib.Path, folder: Dict[str, str], local_rel_directory: Optional[os.PathLike] = None
     ) -> None:
         """
         Upload a directory hierarchy to Google Drive.
@@ -174,8 +174,7 @@ class DriveService:
             local_rel_directory (str): Relative path to the local directory to upload.
         """
         local_root = pathlib.Path(local_root)
-        local_rel_directory = pathlib.Path(local_rel_directory)
-        to_upload = local_root / local_rel_directory
+        to_upload = local_root / (local_rel_directory or ".")
         for root, dirs, files in os.walk(to_upload):
             for file in files:
                 parent = self.get_or_create_subfolders(folder, *pathlib.Path(root).relative_to(local_root).parts)
