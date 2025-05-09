@@ -8,6 +8,7 @@ import argparse
 import tempfile
 import tarfile
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+from typing import Any, Dict, List, Optional
 
 from er_scarecrow_upload.common import init_application
 
@@ -18,10 +19,18 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 def is_retryable_http_error(exc: BaseException) -> bool:
-    # Only retry on HttpError with a “retryable” status
+    """
+    Determine if an exception is a retryable HTTP error.
+
+    Args:
+        exc (BaseException): The exception to check.
+
+    Returns:
+        bool: True if the exception is retryable, False otherwise.
+    """
     if isinstance(exc, HttpError):
         try:
-            status = exc.resp.status  # e.g. 429, 500, etc.
+            status = exc.resp.status  # e.g., 429, 500, etc.
         except Exception:
             return False
         return status in RETRYABLE_STATUS
@@ -29,29 +38,47 @@ def is_retryable_http_error(exc: BaseException) -> bool:
 
 
 class DriveService:
-    def __init__(self, logger, **kwargs):
-        self.service_account_file = kwargs.get("service_account_file") or DEFAULT_SERVICE_ACCOUNT_FILE
-        self.folder_mapping = kwargs.get("folder_mapping") or DEFAULT_FOLDER_MAPPING
-        self.dry_run = kwargs.get("dry_run", False)
-        self.logger = logger
+    def __init__(self, logger: Any, **kwargs: Any) -> None:
+        """
+        Initialize the DriveService with configuration and credentials.
+
+        Args:
+            logger (Any): Logger instance for logging messages.
+            **kwargs (Any): Additional configuration options.
+        """
+        self.service_account_file: str = kwargs.get("service_account_file") or DEFAULT_SERVICE_ACCOUNT_FILE
+        self.folder_mapping: str = kwargs.get("folder_mapping") or DEFAULT_FOLDER_MAPPING
+        self.dry_run: bool = kwargs.get("dry_run", False)
+        self.logger: Any = logger
         self.creds = service_account.Credentials.from_service_account_file(
             self.service_account_file, scopes=["https://www.googleapis.com/auth/drive"]
         )
         self.drive = build("drive", "v3", credentials=self.creds)
         with open(self.folder_mapping) as f:
             self.folder_mapping = json.load(f)
-        self.root_id = self.folder_mapping["root"]
-        self.root_folder = self.verify_shared_drive()
-        self.drive_id = self.root_folder["driveId"]
-        self.folder_cache = {}
+        self.root_id: str = self.folder_mapping["root"]
+        self.root_folder: Dict[str, str] = self.verify_shared_drive()
+        self.drive_id: str = self.root_folder["driveId"]
+        self.folder_cache: Dict[tuple, Dict[str, str]] = {}
 
-    def verify_shared_drive(self):
-        # Verify the Shared Drive folder
+    def verify_shared_drive(self) -> Dict[str, str]:
+        """
+        Verify the Shared Drive folder.
+
+        Returns:
+            Dict[str, str]: Metadata of the verified shared drive folder.
+        """
         folder = self.drive.files().get(fileId=self.root_id, fields="id,name,driveId", supportsAllDrives=True).execute()
         self.logger.debug("✅ Shared Drive folder accessible", folder=folder["name"], id=folder["id"])
         return folder
 
-    def get_drive_service(self):
+    def get_drive_service(self) -> Any:
+        """
+        Get the Google Drive service instance.
+
+        Returns:
+            Any: Google Drive service instance.
+        """
         return self.drive
 
     @retry(
@@ -60,7 +87,16 @@ class DriveService:
         wait=wait_exponential(min=1, max=10),
         reraise=True,
     )
-    def _call_create(self, **kwargs):
+    def _call_create(self, **kwargs: Any) -> Dict[str, Any]:
+        """
+        Create a file or folder in Google Drive.
+
+        Args:
+            **kwargs (Any): Parameters for the create API call.
+
+        Returns:
+            Dict[str, Any]: Metadata of the created file or folder.
+        """
         if self.dry_run:
             self.logger.info("ℹ️  Dry run create", **kwargs)
             return {"id": "dry_run", "name": kwargs["body"]["name"]}
@@ -72,16 +108,36 @@ class DriveService:
         wait=wait_exponential(min=1, max=10),
         reraise=True,
     )
-    def _call_update(self, efile, **kwargs):
+    def _call_update(self, efile: Dict[str, str], **kwargs: Any) -> Dict[str, Any]:
+        """
+        Update an existing file in Google Drive.
+
+        Args:
+            efile (Dict[str, str]): Metadata of the file to update.
+            **kwargs (Any): Parameters for the update API call.
+
+        Returns:
+            Dict[str, Any]: Metadata of the updated file.
+        """
         if self.dry_run:
             self.logger.info("ℹ️  Dry run update", **efile)
             return {"id": "dry_run", "name": kwargs["body"]["name"]}
         return self.drive.files().update(fileId=efile["id"], **kwargs).execute()
 
-    def get_or_create_subfolders(self, parent, path, *paths):
+    def get_or_create_subfolders(self, parent: Dict[str, str], path: str, *paths: str) -> Dict[str, str]:
+        """
+        Get or create subfolders in Google Drive.
+
+        Args:
+            parent (Dict[str, str]): Metadata of the parent folder.
+            path (str): Name of the first subfolder.
+            *paths (str): Additional subfolder names.
+
+        Returns:
+            Dict[str, str]: Metadata of the last created or found subfolder.
+        """
         parents = [parent]
         for name in (path, *paths):
-            # 2) Look for an existing folder with that name
             subfolder = self.get_subfolder(parents[-1]["id"], name)
             full_gdrive_path = f"{'/'.join(p['name'] for p in parents)}/{name}"
             if subfolder:
@@ -89,7 +145,6 @@ class DriveService:
                 self.logger.debug("ℹ️ Found existing folder", name=full_gdrive_path, id=folder_id)
                 parents.append(subfolder)
             else:
-                # 3) Create the folder since it doesn’t exist
                 dest_folder = self._call_create(
                     body={
                         "name": name,
@@ -107,7 +162,17 @@ class DriveService:
                 parents.append(dest_folder)
         return parents[-1]
 
-    def upload_hierarchy(self, local_root, folder, local_rel_directory="."):
+    def upload_hierarchy(
+        self, local_root: pathlib.Path, folder: Dict[str, str], local_rel_directory: str = "."
+    ) -> None:
+        """
+        Upload a directory hierarchy to Google Drive.
+
+        Args:
+            local_root (pathlib.Path): Local root directory.
+            folder (Dict[str, str]): Metadata of the destination folder in Google Drive.
+            local_rel_directory (str): Relative path to the local directory to upload.
+        """
         local_root = pathlib.Path(local_root)
         local_rel_directory = pathlib.Path(local_rel_directory)
         to_upload = local_root / local_rel_directory
@@ -117,14 +182,18 @@ class DriveService:
                 uploaded_file = self.create_or_update_file(parent, pathlib.Path(root) / file)
                 self.logger.debug("Uploaded file", name=str(pathlib.Path(root) / file), id=uploaded_file["id"])
 
-    def upload_archive(self, archive_file: pathlib.Path, folder):
+    def upload_archive(self, archive_file: pathlib.Path, folder: Dict[str, str]) -> None:
+        """
+        Extract and upload an archive file to Google Drive.
+
+        Args:
+            archive_file (pathlib.Path): Path to the archive file.
+            folder (Dict[str, str]): Metadata of the destination folder in Google Drive.
+        """
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Create a temporary directory
             temp_dir_path = pathlib.Path(temp_dir)
-            # Copy the archive file to the temporary directory
             with tarfile.open(archive_file) as tf:
                 tf.extractall(path=temp_dir_path)
-            # Upload the archive file to Google Drive
             self.upload_hierarchy(temp_dir_path, folder)
 
     @retry(
@@ -133,7 +202,16 @@ class DriveService:
         wait=wait_exponential(multiplier=1, min=1, max=10),
         reraise=True,
     )
-    def _drive_list(self, **kwargs):
+    def _drive_list(self, **kwargs: Any) -> List[Dict[str, str]]:
+        """
+        List files or folders in Google Drive.
+
+        Args:
+            **kwargs (Any): Parameters for the list API call.
+
+        Returns:
+            List[Dict[str, str]]: List of files or folders.
+        """
         return (
             self.drive.files()
             .list(
@@ -148,7 +226,17 @@ class DriveService:
             .get("files", [])
         )
 
-    def get_subfolder(self, folder_id, name):
+    def get_subfolder(self, folder_id: str, name: str) -> Optional[Dict[str, str]]:
+        """
+        Get a subfolder by name in a parent folder.
+
+        Args:
+            folder_id (str): ID of the parent folder.
+            name (str): Name of the subfolder.
+
+        Returns:
+            Optional[Dict[str, str]]: Metadata of the subfolder if found, None otherwise.
+        """
         if (folder_id, name) in self.folder_cache:
             return self.folder_cache[(folder_id, name)]
         query_template = (
@@ -168,7 +256,17 @@ class DriveService:
             return items[0]
         return None
 
-    def create_or_update_file(self, parent, local_path):
+    def create_or_update_file(self, parent: Dict[str, str], local_path: pathlib.Path) -> Dict[str, Any]:
+        """
+        Create or update a file in Google Drive.
+
+        Args:
+            parent (Dict[str, str]): Metadata of the parent folder.
+            local_path (pathlib.Path): Path to the local file.
+
+        Returns:
+            Dict[str, Any]: Metadata of the created or updated file.
+        """
         local_path = pathlib.Path(local_path)
         dfile = self.get_file(parent, local_path.name)
         media = MediaFileUpload(local_path, resumable=True)
@@ -187,7 +285,17 @@ class DriveService:
             supportsAllDrives=True,
         )
 
-    def get_file(self, parent, filename):
+    def get_file(self, parent: Dict[str, str], filename: str) -> Optional[Dict[str, str]]:
+        """
+        Get a file by name in a parent folder.
+
+        Args:
+            parent (Dict[str, str]): Metadata of the parent folder.
+            filename (str): Name of the file.
+
+        Returns:
+            Optional[Dict[str, str]]: Metadata of the file if found, None otherwise.
+        """
         query = f"name = '{filename}' and trashed = false and '{parent['id']}' in parents"
         files = self._drive_list(
             q=query,
