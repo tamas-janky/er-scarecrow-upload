@@ -359,7 +359,7 @@ def get_parser(parser: argparse.ArgumentParser):
     upload_group = parser.add_argument_group("Upload options")
     upload_variants = upload_group.add_mutually_exclusive_group()
     upload_variants.add_argument("--upload-archive", type=pathlib.Path, help="Path to the file to upload.")
-    upload_variants.add_argument(
+    parser.add_argument(
         "--upload-directory",
         type=str,
         help="Path name of to the GDrive to upload the files into.",
