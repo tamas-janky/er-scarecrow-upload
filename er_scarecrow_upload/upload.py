@@ -1,44 +1,88 @@
+import json
 import os
 import pathlib
 from google.oauth2 import service_account
 from googleapiclient.discovery import build  # type: ignore[import]
 from googleapiclient.http import MediaFileUpload, HttpError  # type: ignore[import]
 import argparse
-import subprocess
 import tempfile
+import tarfile
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from er_scarecrow_upload.common import init_application
 
+DEFAULT_SERVICE_ACCOUNT_FILE = "/etc/er-scarecrow-upload/google-service-key.json"
+DEFAULT_FOLDER_MAPPING = "/etc/er-scarecrow-upload/mapping.json"
+
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def is_retryable_http_error(exc: BaseException) -> bool:
+    # Only retry on HttpError with a “retryable” status
+    if isinstance(exc, HttpError):
+        try:
+            status = exc.resp.status  # e.g. 429, 500, etc.
+        except Exception:
+            return False
+        return status in RETRYABLE_STATUS
+    return False
+
 
 class DriveService:
-    def __init__(self, service_account_file, logger, arsg: argparse.Namespace):
-        self.args = arsg
+    def __init__(self, logger, **kwargs):
+        self.service_account_file = kwargs.get("service_account_file") or DEFAULT_SERVICE_ACCOUNT_FILE
+        self.folder_mapping = kwargs.get("folder_mapping") or DEFAULT_FOLDER_MAPPING
+        self.dry_run = kwargs.get("dry_run", False)
         self.logger = logger
         self.creds = service_account.Credentials.from_service_account_file(
-            service_account_file, scopes=["https://www.googleapis.com/auth/drive"]
+            self.service_account_file, scopes=["https://www.googleapis.com/auth/drive"]
         )
         self.drive = build("drive", "v3", credentials=self.creds)
+        with open(self.folder_mapping) as f:
+            self.folder_mapping = json.load(f)
+        self.root_id = self.folder_mapping["root"]
+        self.root_folder = self.verify_shared_drive()
+        self.drive_id = self.root_folder["driveId"]
+        self.folder_cache = {}
 
-    def verify_shared_drive(self, folder_id):
+    def verify_shared_drive(self):
         # Verify the Shared Drive folder
-        folder = self.drive.files().get(fileId=folder_id, fields="id,name", supportsAllDrives=True).execute()
-        self.logger.info("✅ Shared Drive folder:", folder=folder["name"], id=folder["id"])
+        folder = self.drive.files().get(fileId=self.root_id, fields="id,name,driveId", supportsAllDrives=True).execute()
+        self.logger.debug("✅ Shared Drive folder accessible", folder=folder["name"], id=folder["id"])
         return folder
 
     def get_drive_service(self):
         return self.drive
 
+    @retry(
+        retry=retry_if_exception(is_retryable_http_error),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(min=1, max=10),
+        reraise=True,
+    )
     def _call_create(self, **kwargs):
-        if self.args.dry_run:
+        if self.dry_run:
             self.logger.info("ℹ️  Dry run create", **kwargs)
             return {"id": "dry_run", "name": kwargs["body"]["name"]}
         return self.drive.files().create(**kwargs).execute()
+
+    @retry(
+        retry=retry_if_exception(is_retryable_http_error),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(min=1, max=10),
+        reraise=True,
+    )
+    def _call_update(self, efile, **kwargs):
+        if self.dry_run:
+            self.logger.info("ℹ️  Dry run update", **efile)
+            return {"id": "dry_run", "name": kwargs["body"]["name"]}
+        return self.drive.files().update(fileId=efile["id"], **kwargs).execute()
 
     def get_or_create_subfolders(self, parent, path, *paths):
         parents = [parent]
         for name in (path, *paths):
             # 2) Look for an existing folder with that name
-            subfolder = self.get_subfolder(parent["id"], name)
+            subfolder = self.get_subfolder(parents[-1]["id"], name)
             full_gdrive_path = f"{'/'.join(p['name'] for p in parents)}/{name}"
             if subfolder:
                 folder_id = subfolder["id"]
@@ -50,9 +94,9 @@ class DriveService:
                     body={
                         "name": name,
                         "mimeType": "application/vnd.google-apps.folder",
-                        "parents": [parent["id"]],
+                        "parents": [parents[-1]["id"]],
                     },
-                    fields="id",
+                    fields="id,name",
                     supportsAllDrives=True,
                 )
                 self.logger.info(
@@ -61,51 +105,52 @@ class DriveService:
                     id=dest_folder.get("id"),
                 )
                 parents.append(dest_folder)
-            return parents[-1]
+        return parents[-1]
 
-    def upload_hierachy(self, local_root, folder, local_rel_directory="."):
+    def upload_hierarchy(self, local_root, folder, local_rel_directory="."):
         local_root = pathlib.Path(local_root)
         local_rel_directory = pathlib.Path(local_rel_directory)
         to_upload = local_root / local_rel_directory
         for root, dirs, files in os.walk(to_upload):
-            for d in dirs:
-                upload_dir = pathlib.Path(root) / d
-                upload_dir.relative_to(local_root).parts
-                self.get_or_create_subfolders()
             for file in files:
-                media = MediaFileUpload(pathlib.Path(root) / file, resumable=True)
-                file_metadata = {"name": file, "parents": [folder["id"]]}
-                new_file = self._call_create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields="id",
-                    supportsAllDrives=True,
-                )
-                self.logger.debug("Uploaded file", name=file, id=new_file["id"])
+                parent = self.get_or_create_subfolders(folder, *pathlib.Path(root).relative_to(local_root).parts)
+                uploaded_file = self.create_or_update_file(parent, pathlib.Path(root) / file)
+                self.logger.debug("Uploaded file", name=str(pathlib.Path(root) / file), id=uploaded_file["id"])
 
     def upload_archive(self, archive_file: pathlib.Path, folder):
-        temp_dir = tempfile.mkdtemp()
-        # Create a temporary directory
-        temp_dir_path = pathlib.Path(temp_dir)
-        # Copy the archive file to the temporary directory
-        temp_archive_file = temp_dir_path / archive_file.name
-        subprocess.check_call(["cp", str(archive_file), str(temp_archive_file)])
-        subprocess.check_call(["tar", "-C", str(temp_dir_path), "-xf", str(temp_archive_file)])
-        os.remove(temp_archive_file)
-        # Upload the archive file to Google Drive
-        for root, dirs, files in os.walk(temp_dir_path):
-            for file in files:
-                media = MediaFileUpload(pathlib.Path(root) / file, resumable=True)
-                file_metadata = {"name": file, "parents": [folder["id"]]}
-                new_file = self._call_create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields="id",
-                    supportsAllDrives=True,
-                )
-                self.logger.debug("Uploaded file", name=file, id=new_file["id"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a temporary directory
+            temp_dir_path = pathlib.Path(temp_dir)
+            # Copy the archive file to the temporary directory
+            with tarfile.open(archive_file) as tf:
+                tf.extractall(path=temp_dir_path)
+            # Upload the archive file to Google Drive
+            self.upload_hierarchy(temp_dir_path, folder)
+
+    @retry(
+        retry=retry_if_exception(is_retryable_http_error),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    def _drive_list(self, **kwargs):
+        return (
+            self.drive.files()
+            .list(
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora="drive",
+                spaces="drive",
+                driveId=self.drive_id,
+                **kwargs,
+            )
+            .execute()
+            .get("files", [])
+        )
 
     def get_subfolder(self, folder_id, name):
+        if (folder_id, name) in self.folder_cache:
+            return self.folder_cache[(folder_id, name)]
         query_template = (
             "mimeType='application/vnd.google-apps.folder' "
             "and name='{name}' "
@@ -113,26 +158,43 @@ class DriveService:
             "and trashed=false"
         )
 
-        try:
-            resp = (
-                self.drive.files()
-                .list(
-                    q=query_template.format(name=name, parent=folder_id),
-                    spaces="drive",
-                    fields="files(id, name)",
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True,
-                    pageSize=1,
-                )
-                .execute()
+        items = self._drive_list(
+            q=query_template.format(name=name, parent=folder_id),
+            fields="files(id, name)",
+            pageSize=1,
+        )
+        if items:
+            self.folder_cache[(folder_id, name)] = items[0]
+            return items[0]
+        return None
+
+    def create_or_update_file(self, parent, local_path):
+        local_path = pathlib.Path(local_path)
+        dfile = self.get_file(parent, local_path.name)
+        media = MediaFileUpload(local_path, resumable=True)
+        if dfile:
+            return self._call_update(
+                dfile,
+                fields="id,name",
+                media_body=media,
+                supportsAllDrives=True,
             )
-            items = resp.get("files", [])
-            if items:
-                return items[0]
-            return None
-        except HttpError as e:
-            print("❌ API error:", e)
-            raise e
+        file_metadata = {"name": local_path.name, "parents": [parent["id"]]}
+        return self._call_create(
+            body=file_metadata,
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True,
+        )
+
+    def get_file(self, parent, filename):
+        query = f"name = '{filename}' and trashed = false and '{parent['id']}' in parents"
+        files = self._drive_list(
+            q=query,
+            fields="files(id, name)",
+            pageSize=1,
+        )
+        return files[0] if files else None
 
 
 def main():
@@ -143,28 +205,28 @@ def main():
         "Upload files to Google Drive",
         get_parser,
     )
-    service = DriveService(args.service_account_file, logger, args)
-    root = service.verify_shared_drive(args.folder_id)
+    service = DriveService(logger, **vars(args))
     if args.check:
         return
     if args.upload:
         if args.upload_archive:
-            dest = service.get_or_create_subfolders(root, *pathlib.Path(args.upload_directory).parts)
+            dest = service.get_or_create_subfolders(service.root_folder, *pathlib.Path(args.upload_directory).parts)
             service.upload_archive(args.upload_archive, dest)
         elif args.upload_directory:
-            dest = service.get_or_create_subfolders(root, *pathlib.Path(args.upload_directory).parts)
-            service.upload_hierachy(args.upload_root, dest, args.upload_local_directory)
+            dest = service.get_or_create_subfolders(service.root_folder, *pathlib.Path(args.upload_directory).parts)
+            service.upload_hierarchy(args.upload_root, dest, args.upload_local_directory)
         else:
             parser.error("Either --upload-archive or --upload-directory must be specified.")
 
 
 def get_parser(parser: argparse.ArgumentParser):
+
     parser.add_argument(
         "-s",
         "--service-account-file",
         type=str,
-        help="Path to the service account JSON key file.(default:/etc/er-scarecrow-upload/google-service-key.json",
-    ),
+        help=f"Path to the service account JSON key file.(default:{DEFAULT_SERVICE_ACCOUNT_FILE})",
+    )
     parser.add_argument(
         "-n",
         "--dry-run",
@@ -176,8 +238,7 @@ def get_parser(parser: argparse.ArgumentParser):
         "-m",
         "--folder-mapping",
         type=str,
-        help="path to a json file containing the root folder mappings, or a "
-        "json object string (default:/etc/er-scarecrow-upload/root_mapping.json",
+        help=f"path to a json file containing the root folder mappings.(default:{DEFAULT_FOLDER_MAPPING})",
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--file-name", type=str, nargs="+", help="Name of the file(s) to upload.")
@@ -209,7 +270,7 @@ def get_parser(parser: argparse.ArgumentParser):
         default=".",
     )
     upload_group.add_argument(
-        "--upload-cleaunup",
+        "--upload-cleanup",
         action="store_true",
         help="Cleanup the upload artifacts after successful upload.",
         default=False,

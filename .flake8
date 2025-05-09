@@ -1,5 +1,5 @@
 [flake8]
-exclude = build,dist,.venv,.eggs
+exclude = build,dist,.venv,.eggs,test
 max-line-length = 120
 max-complexity = 10
 count = True
