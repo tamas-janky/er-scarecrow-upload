@@ -34,3 +34,6 @@ fallback_version = "0.1.0"
 er-scarecrow-upload = "er_scarecrow_upload.upload:main"
 er-scarecrow-fetch =  "er_scarecrow_upload.fetch:main"
 er-scarecrow-fetch-upload =  "er_scarecrow_upload.fetch_upload:main"
+
+[tool.black]
+line-length = 120

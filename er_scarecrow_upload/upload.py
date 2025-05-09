@@ -1,8 +1,8 @@
 import os
 import pathlib
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, HttpError
+from googleapiclient.discovery import build  # type: ignore[import]
+from googleapiclient.http import MediaFileUpload, HttpError  # type: ignore[import]
 import argparse
 import subprocess
 import tempfile
@@ -21,14 +21,8 @@ class DriveService:
 
     def verify_shared_drive(self, folder_id):
         # Verify the Shared Drive folder
-        folder = (
-            self.drive.files()
-            .get(fileId=folder_id, fields="id,name", supportsAllDrives=True)
-            .execute()
-        )
-        self.logger.info(
-            "✅ Shared Drive folder:", folder=folder["name"], id=folder["id"]
-        )
+        folder = self.drive.files().get(fileId=folder_id, fields="id,name", supportsAllDrives=True).execute()
+        self.logger.info("✅ Shared Drive folder:", folder=folder["name"], id=folder["id"])
         return folder
 
     def get_drive_service(self):
@@ -48,9 +42,7 @@ class DriveService:
             full_gdrive_path = f"{'/'.join(p['name'] for p in parents)}/{name}"
             if subfolder:
                 folder_id = subfolder["id"]
-                self.logger.debug(
-                    f"ℹ️ Found existing folder", name=full_gdrive_path, id=folder_id
-                )
+                self.logger.debug("ℹ️ Found existing folder", name=full_gdrive_path, id=folder_id)
                 parents.append(subfolder)
             else:
                 # 3) Create the folder since it doesn’t exist
@@ -64,7 +56,7 @@ class DriveService:
                     supportsAllDrives=True,
                 )
                 self.logger.info(
-                    f"✅ Created new folder",
+                    "✅ Created new folder",
                     name=full_gdrive_path,
                     id=dest_folder.get("id"),
                 )
@@ -98,9 +90,7 @@ class DriveService:
         # Copy the archive file to the temporary directory
         temp_archive_file = temp_dir_path / archive_file.name
         subprocess.check_call(["cp", str(archive_file), str(temp_archive_file)])
-        subprocess.check_call(
-            ["tar", "-C", str(temp_dir_path), "-xf", str(temp_archive_file)]
-        )
+        subprocess.check_call(["tar", "-C", str(temp_dir_path), "-xf", str(temp_archive_file)])
         os.remove(temp_archive_file)
         # Upload the archive file to Google Drive
         for root, dirs, files in os.walk(temp_dir_path):
@@ -147,9 +137,7 @@ class DriveService:
 
 def main():
     # Set up argument parsing
-    parser = argparse.ArgumentParser(
-        description="Upload a file to a Google Drive folder using a service account."
-    )
+    parser = argparse.ArgumentParser(description="Upload a file to a Google Drive folder using a service account.")
     args, logger = init_application(
         "er-scarecrow-upload",
         "Upload files to Google Drive",
@@ -161,19 +149,13 @@ def main():
         return
     if args.upload:
         if args.upload_archive:
-            dest = service.get_or_create_subfolders(
-                root, *pathlib.Path(args.upload_directory).parts
-            )
+            dest = service.get_or_create_subfolders(root, *pathlib.Path(args.upload_directory).parts)
             service.upload_archive(args.upload_archive, dest)
         elif args.upload_directory:
-            dest = service.get_or_create_subfolders(
-                root, *pathlib.Path(args.upload_directory).parts
-            )
+            dest = service.get_or_create_subfolders(root, *pathlib.Path(args.upload_directory).parts)
             service.upload_hierachy(args.upload_root, dest, args.upload_local_directory)
         else:
-            parser.error(
-                "Either --upload-archive or --upload-directory must be specified."
-            )
+            parser.error("Either --upload-archive or --upload-directory must be specified.")
 
 
 def get_parser(parser: argparse.ArgumentParser):
@@ -181,8 +163,8 @@ def get_parser(parser: argparse.ArgumentParser):
         "-s",
         "--service-account-file",
         type=str,
-        help="Path to the service account JSON key file.(default:/etc/er-scarecrow-upload/google-service-key.json"),
-    )
+        help="Path to the service account JSON key file.(default:/etc/er-scarecrow-upload/google-service-key.json",
+    ),
     parser.add_argument(
         "-n",
         "--dry-run",
@@ -191,28 +173,24 @@ def get_parser(parser: argparse.ArgumentParser):
         default=False,
     )
     parser.add_argument(
-        "-m","--folder-mapping",
+        "-m",
+        "--folder-mapping",
         type=str,
-        help="path to a json file containing the root folder mappings, or a json object string (default:/etc/er-scarecrow-upload/root_mapping.json",
+        help="path to a json file containing the root folder mappings, or a "
+        "json object string (default:/etc/er-scarecrow-upload/root_mapping.json",
     )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--file-name", type=str, nargs="+", help="Name of the file(s) to upload."
-    )
+    group.add_argument("--file-name", type=str, nargs="+", help="Name of the file(s) to upload.")
     group.add_argument(
         "--check",
         action="store_true",
         help="Check the folder ID without uploading files.",
         default=False,
     )
-    group.add_argument(
-        "--upload", action="store_true", help="Upload files.", default=False
-    )
+    group.add_argument("--upload", action="store_true", help="Upload files.", default=False)
     upload_group = parser.add_argument_group("Upload options")
     upload_variants = upload_group.add_mutually_exclusive_group()
-    upload_variants.add_argument(
-        "--upload-archive", type=pathlib.Path, help="Path to the file to upload."
-    )
+    upload_variants.add_argument("--upload-archive", type=pathlib.Path, help="Path to the file to upload.")
     upload_variants.add_argument(
         "--upload-directory",
         type=str,

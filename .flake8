@@ -1,0 +1,9 @@
+[flake8]
+exclude = build,dist,.venv,.eggs
+max-line-length = 120
+max-complexity = 10
+count = True
+statistics = True
+show-source = True
+per-file-ignores =
+    __init__.py:F401,F403

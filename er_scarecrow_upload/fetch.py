@@ -1,13 +1,10 @@
 import os
 import pathlib
-import tarfile
-from fabric import Connection
-import argparse
+from fabric import Connection  # type: ignore[import]
 import datetime
 import pytz
-from context_logger import setup_logging, get_logger
-import retrying
-import logging
+from context_logger import get_logger
+import retrying  # type: ignore[import]
 
 from er_scarecrow_upload.common import init_application
 
@@ -21,12 +18,8 @@ def log_before_retry(exc):
     return True
 
 
-@retrying.retry(
-    stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=log_before_retry
-)
-def download_and_archive_files(
-    logger, ssh_alias, remote_directory, local_directory, timezone, timeout
-):
+@retrying.retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=log_before_retry)
+def download_and_archive_files(logger, ssh_alias, remote_directory, local_directory, timezone, timeout):
     """
     Connects to a remote host using an SSH alias, downloads files matching the current date pattern,
     and archives them into a tar file locally.
@@ -46,29 +39,24 @@ def download_and_archive_files(
     with Connection(ssh_alias, connect_timeout=timeout) as conn:
 
         # List files in the remote directory
-        result = conn.run(
-            f"find {remote_directory} -name {pattern}\* -type f", hide=True
-        )
+        result = conn.run(f"find {remote_directory} -name {pattern}\\* -type f", hide=True)
         files_to_download = result.stdout.splitlines()
 
         if not files_to_download:
-            logger.info(
-                f"⚠️  No files found matching the pattern on host '{ssh_alias}'."
-            )
+            logger.info(f"⚠️  No files found matching the pattern on host '{ssh_alias}'.")
         else:
             archive_file = f"/tmp/{ssh_alias}_{current_date}.tar"
             dest_archive_file = f"{ssh_alias}_{dest_date}.tar"
-            archive_result = conn.run(
-                f"cd {remote_directory} && find ./ -name {pattern}\* -type f -print0 | sudo tar --null --transform='s|.*/||' -cvf {archive_file} --remove-files  --files-from=-",
+            conn.run(
+                f"cd {remote_directory} && find ./ -name {pattern}\\* -type f -print0 | sudo tar --null "
+                f"--transform='s|.*/||' -cvf {archive_file} --remove-files  --files-from=-",
                 hide=True,
             )
             logger.info(f"ℹ️  archive file is {archive_file}")
             os.makedirs(pathlib.Path(local_directory) / ssh_alias, exist_ok=True)
             dest_file = pathlib.Path(local_directory) / ssh_alias / dest_archive_file
             conn.get(archive_file, str(dest_file))
-            logger.info(
-                f"✅  Downloaded archive file: {archive_file} to {str(dest_file)}"
-            )
+            logger.info(f"✅  Downloaded archive file: {archive_file} to {str(dest_file)}")
             return dest_file
 
 
@@ -97,9 +85,7 @@ def get_parser(parser):
         default="Europe/Budapest",
         help="Timezone to use for date formatting.",
     )
-    parser.add_argument(
-        "--timeout", type=int, default=30, help="Timeout for SSH connection in seconds."
-    )
+    parser.add_argument("--timeout", type=int, default=30, help="Timeout for SSH connection in seconds.")
     return parser
 
 
