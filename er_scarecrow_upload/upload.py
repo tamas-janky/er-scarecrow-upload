@@ -47,14 +47,14 @@ class DriveService:
             **kwargs (Any): Additional configuration options.
         """
         self.service_account_file: str = kwargs.get("service_account_file") or DEFAULT_SERVICE_ACCOUNT_FILE
-        self.folder_mapping: str = kwargs.get("folder_mapping") or DEFAULT_FOLDER_MAPPING
+        self.folder_mapping_path: str = kwargs.get("folder_mapping") or DEFAULT_FOLDER_MAPPING
         self.dry_run: bool = kwargs.get("dry_run", False)
         self.logger: Any = logger
         self.creds = service_account.Credentials.from_service_account_file(
             self.service_account_file, scopes=["https://www.googleapis.com/auth/drive"]
         )
         self.drive = build("drive", "v3", credentials=self.creds)
-        with open(self.folder_mapping) as f:
+        with open(self.folder_mapping_path) as f:
             self.folder_mapping = json.load(f)
         self.root_id: str = self.folder_mapping["root"]
         self.root_folder: Dict[str, str] = self.verify_shared_drive()
