@@ -124,7 +124,7 @@ class DriveService:
             return {"id": "dry_run", "name": kwargs["body"]["name"]}
         return self.drive.files().update(fileId=efile["id"], **kwargs).execute()
 
-    def get_or_create_subfolders(self, parent: Dict[str, str], path: str, *paths: str) -> Dict[str, str]:
+    def get_or_create_subfolders(self, parent: Dict[str, str], *paths: str) -> Dict[str, str]:
         """
         Get or create subfolders in Google Drive.
 
@@ -137,7 +137,7 @@ class DriveService:
             Dict[str, str]: Metadata of the last created or found subfolder.
         """
         parents = [parent]
-        for name in (path, *paths):
+        for name in paths:
             subfolder = self.get_subfolder(parents[-1]["id"], name)
             full_gdrive_path = f"{'/'.join(p['name'] for p in parents)}/{name}"
             if subfolder:
@@ -194,6 +194,16 @@ class DriveService:
             with tarfile.open(archive_file) as tf:
                 tf.extractall(path=temp_dir_path)
             self.upload_hierarchy(temp_dir_path, folder)
+
+    def upload_file(self, local_path: pathlib.Path, folder: Dict[str, str]) -> None:
+        """
+        Upload a file to Google Drive.
+
+        Args:
+            local_path (pathlib.Path): Path to the local file.
+            folder (Dict[str, str]): Metadata of the destination folder in Google Drive.
+        """
+        self.create_or_update_file(folder, local_path)
 
     @retry(
         retry=retry_if_exception(is_retryable_http_error),
@@ -316,14 +326,18 @@ def main():
     if args.check:
         return
     if args.upload:
+        target_directory = pathlib.Path(args.upload_directory).parts if args.upload_directory else []
         if args.upload_archive:
-            dest = service.get_or_create_subfolders(service.root_folder, *pathlib.Path(args.upload_directory).parts)
+            dest = service.get_or_create_subfolders(service.root_folder, *target_directory)
             service.upload_archive(args.upload_archive, dest)
-        elif args.upload_directory:
-            dest = service.get_or_create_subfolders(service.root_folder, *pathlib.Path(args.upload_directory).parts)
+        elif args.upload_local_directory:
+            dest = service.get_or_create_subfolders(service.root_folder, *target_directory)
             service.upload_hierarchy(args.upload_root, dest, args.upload_local_directory)
+        elif args.upload_file:
+            dest = service.get_or_create_subfolders(service.root_folder, *target_directory)
+            service.upload_file(args.upload_file, dest)
         else:
-            parser.error("Either --upload-archive or --upload-directory must be specified.")
+            parser.error("Either --upload-archive or --upload-directory or --upload-file must be specified.")
 
 
 def get_parser(parser: argparse.ArgumentParser):
@@ -362,25 +376,29 @@ def get_parser(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--upload-directory",
         type=str,
-        help="Path name of to the GDrive to upload the files into.",
+        help="Path name of to the GDrive to upload the files into. (default: root google drive folder)",
     )
     upload_group.add_argument(
         "--upload-root",
         type=str,
-        help="Path to the root directory for hiearchical upload.",
+        help="Path to the root directory for hierarchical upload.",
         default=".",
     )
     upload_group.add_argument(
         "--upload-local-directory",
         type=str,
         help="relative path to the local upload directory to upload.",
-        default=".",
     )
     upload_group.add_argument(
         "--upload-cleanup",
         action="store_true",
         help="Cleanup the upload artifacts after successful upload.",
         default=False,
+    )
+    upload_group.add_argument(
+        "--upload-file",
+        type=pathlib.Path,
+        help="Path to the file to upload.",
     )
     return parser
 
