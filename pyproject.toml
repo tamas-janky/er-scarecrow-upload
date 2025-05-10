@@ -14,7 +14,7 @@ dependencies = [
     "pytz",
     "retrying",
     "tenacity",
-    "python-context-logger @ git+https://github.com/EffectiveRange/python-context-logger.git"
+    "python-context-logger @ git+https://github.com/EffectiveRange/python-context-logger.git@latest"
 ]
 
 [build-system]
