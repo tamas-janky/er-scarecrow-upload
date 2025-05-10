@@ -61,11 +61,11 @@ def download_and_archive_files(logger: Logger, ssh_alias: str, remote_directory:
                 f"--transform='s|.*/||' -cvf {archive_file} --remove-files  --files-from=-",
                 hide=True,
             )
-            logger.info(f"ℹ️  archive file is {archive_file}")
+            logger.debug(f"ℹ️  archive file is {archive_file}")
             os.makedirs(Path(local_directory) / ssh_alias, exist_ok=True)
             dest_file = Path(local_directory) / ssh_alias / dest_archive_file
             conn.get(archive_file, str(dest_file))
-            logger.info(f"✅  Downloaded archive file: {archive_file} to {str(dest_file)}")
+            logger.debug(f"✅  Downloaded archive file: {archive_file} to {str(dest_file)}")
             return dest_file
 
 
@@ -108,7 +108,7 @@ def main() -> None:
     )
     # Iterate over all specified SSH aliases
     for ssh_alias in args.source:
-        logger.info(f"ℹ️   Processing host '{ssh_alias}'")
+        logger.debug(f"ℹ️   Processing host '{ssh_alias}'")
         download_and_archive_files(
             logger,
             ssh_alias,
