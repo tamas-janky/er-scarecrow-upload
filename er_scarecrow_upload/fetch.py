@@ -19,7 +19,9 @@ def log_before_retry(exc):
 
 
 @retrying.retry(stop_max_attempt_number=3, wait_fixed=5000, retry_on_exception=log_before_retry)
-def download_and_archive_files(logger, ssh_alias, remote_directory, local_directory, timezone, timeout):
+def download_and_archive_files(
+    logger, ssh_alias, remote_directory, local_directory, timezone, timeout, since_days=None
+):
     """
     Connects to a remote host using an SSH alias, downloads files matching the current date pattern,
     and archives them into a tar file locally.
@@ -31,7 +33,7 @@ def download_and_archive_files(logger, ssh_alias, remote_directory, local_direct
     # Get the current date in the format %Y-%m-%d
     start = datetime.datetime.now(timezone)
     # TODO parametrize the since
-    current_date = start.strftime("%Y-%m-%d")
+    current_date = (start if since_days is None else (start - datetime.timedelta(days=since_days))).strftime("%Y-%m-%d")
     dest_date = start.strftime("%Y-%m-%d_%H-%M-%S")
     pattern = f"{current_date}T"
 
@@ -46,7 +48,7 @@ def download_and_archive_files(logger, ssh_alias, remote_directory, local_direct
             logger.info(f"⚠️  No files found matching the pattern on host '{ssh_alias}'.")
         else:
             archive_file = f"/tmp/{ssh_alias}_{current_date}.tar"
-            dest_archive_file = f"{ssh_alias}_{dest_date}.tar"
+            dest_archive_file = f"{ssh_alias}_{current_date}_{dest_date}.tar"
             conn.run(
                 f"cd {remote_directory} && find ./ -name {pattern}\\* -type f -print0 | sudo tar --null "
                 f"--transform='s|.*/||' -cvf {archive_file} --remove-files  --files-from=-",
@@ -85,6 +87,7 @@ def get_parser(parser):
         default="Europe/Budapest",
         help="Timezone to use for date formatting.",
     )
+    parser.add_argument("--since-days", type=int, default=None, help="Number of days to look back for files.")
     parser.add_argument("--timeout", type=int, default=30, help="Timeout for SSH connection in seconds.")
     return parser
 
