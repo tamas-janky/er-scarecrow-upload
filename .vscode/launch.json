@@ -26,7 +26,8 @@
                 "--upload",
                 "--upload-directory",
                 "test_gdriv",
-                "--upload-local-directory=test",
+                "--upload-root=.",
+                "--upload-local-directory=~/development/effective-range/er-scarecrow-upload/test",
                 "--log-file",
                 "./up.log"
             ]

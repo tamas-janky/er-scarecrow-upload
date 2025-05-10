@@ -154,7 +154,7 @@ class DriveService:
                     fields="id,name",
                     supportsAllDrives=True,
                 )
-                self.logger.info(
+                self.logger.debug(
                     "✅ Created new folder",
                     name=full_gdrive_path,
                     id=dest_folder.get("id"),
@@ -174,14 +174,19 @@ class DriveService:
             local_rel_directory (str): Relative path to the local directory to upload.
         """
         local_root = pathlib.Path(local_root)
-        to_upload = local_root / (local_rel_directory or ".")
+        local_dir = pathlib.Path(local_rel_directory or ".")
+        to_upload = local_root / local_dir if not local_dir.is_absolute() else local_dir
+        self.logger.warn(f"{to_upload}")
         for root, dirs, files in os.walk(to_upload):
             for file in files:
-                parent = self.get_or_create_subfolders(folder, *pathlib.Path(root).relative_to(local_root).parts)
+                self.logger.warn(f"{pathlib.Path(root).resolve()}")
+                parent = self.get_or_create_subfolders(
+                    folder, *pathlib.Path(root).resolve().relative_to(local_root).parts
+                )
                 uploaded_file = self.create_or_update_file(parent, pathlib.Path(root) / file)
                 self.logger.debug("Uploaded file", name=str(pathlib.Path(root) / file), id=uploaded_file["id"])
 
-    def upload_archive(self, archive_file: pathlib.Path, folder: Dict[str, str]) -> None:
+    def upload_hierarchy_from_archive(self, archive_file: pathlib.Path, folder: Dict[str, str]) -> None:
         """
         Extract and upload an archive file to Google Drive.
 
@@ -194,6 +199,15 @@ class DriveService:
             with tarfile.open(archive_file) as tf:
                 tf.extractall(path=temp_dir_path)
             self.upload_hierarchy(temp_dir_path, folder)
+
+    def archive_and_upload(self, local_path: pathlib.Path, folder: Dict[str, str]) -> None:
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tf_path = pathlib.Path(temp_dir) / local_path.name
+            with tarfile.open(tf_path, "w") as tf:
+                tf.add(local_path, arcname=local_path.name)
+                self.upload_file(tf_path, folder)
+                self.logger.debug("Uploaded archive", name=str(tf_path), id=folder["id"])
 
     def upload_file(self, local_path: pathlib.Path, folder: Dict[str, str]) -> None:
         """
@@ -329,10 +343,13 @@ def main():
         target_directory = pathlib.Path(args.upload_directory).parts if args.upload_directory else []
         if args.upload_archive:
             dest = service.get_or_create_subfolders(service.root_folder, *target_directory)
-            service.upload_archive(args.upload_archive, dest)
+            service.upload_hierarchy_from_archive(args.upload_archive, dest)
         elif args.upload_local_directory:
             dest = service.get_or_create_subfolders(service.root_folder, *target_directory)
-            service.upload_hierarchy(args.upload_root, dest, args.upload_local_directory)
+            if args.archive:
+                service.archive_and_upload(pathlib.Path(args.upload_local_directory), dest)
+            else:
+                service.upload_hierarchy(args.upload_root, dest, args.upload_local_directory)
         elif args.upload_file:
             dest = service.get_or_create_subfolders(service.root_folder, *target_directory)
             service.upload_file(args.upload_file, dest)
@@ -399,6 +416,11 @@ def get_parser(parser: argparse.ArgumentParser):
         "--upload-file",
         type=pathlib.Path,
         help="Path to the file to upload.",
+    )
+    upload_group.add_argument(
+        "--archive",
+        action="store_true",
+        help="archive directory and upload to GDrive",
     )
     return parser
 
