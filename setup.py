@@ -19,14 +19,13 @@ setup(
     use_scm_version=True,
     setup_requires=["setuptools_scm"],
     install_requires=[
-        "google-api-python-client>=2.90.0",
+        "google-api-python-client",
         "google-auth>=1.5.1",
         "google-auth-httplib2>=0.1.0",
         "google-auth-oauthlib>=0.4.2",
-        "fabric",
         "pytz",
         "retrying",
         "tenacity",
         "python-context-logger@git+https://github.com/EffectiveRange/python-context-logger.git@latest",
-    ]
+    ],
 )

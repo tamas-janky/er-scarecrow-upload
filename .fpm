@@ -7,5 +7,6 @@
 --python-package-name-prefix python3
 --python-disable-dependency google-api-python-client
 --depends python3-googleapi
+--depends python3-fabric
 --python-disable-dependency pytz
 --depends python3-tz
