@@ -36,7 +36,7 @@ def collect_and_download_files(logger: Logger, ssh_alias: str, timeout: int, rem
         source_dirs = [(Path(remote_directory)
                         / f"{time.year}-{time.month:02d}-{time.day:02d}"
                         / f"{time.hour:02d}"
-                        / f"{time.minute:02d}_p200") for time in time_window]
+                        / f"{time.minute:02d}_p0200") for time in time_window]
 
         connection.run(f"sudo mkdir -p {collect_directory}")
 
